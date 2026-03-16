@@ -46,7 +46,7 @@ async def handle_menu_databases(
     await callback.answer(f"⏳ Loading {v['ds_plural']}...")
     await safe_send(callback, f"🔄 Fetching {v['ds_plural']}...")
 
-    all_databases = await discovery.list_databases(force_refresh=True)
+    all_databases = await discovery.list_databases()
     databases = await filter_databases_for_user(
         all_databases, user_role, callback.from_user.id, database,
     )
@@ -116,7 +116,7 @@ async def handle_select_db(
     await safe_send(callback, f"🔄 Loading *{selected.title}*...")
 
     try:
-        schema = await discovery.get_database_schema(selected.id, force_refresh=True)
+        schema = await discovery.get_database_schema(selected.id)
         access_warning = ""
     except Exception:
         schema = discovery.get_cached_schema(selected.id) or selected

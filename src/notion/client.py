@@ -36,20 +36,20 @@ class NotionClientWrapper:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)
     async def search_databases(self) -> list[dict[str, Any]]:
         """Search for all databases accessible by the integration."""
-        async with _RATE_LIMIT:
-            results: list[dict[str, Any]] = []
-            start_cursor = None
-            while True:
+        results: list[dict[str, Any]] = []
+        start_cursor = None
+        while True:
+            async with _RATE_LIMIT:
                 response = await self._client.search(
                     filter={"property": "object", "value": "data_source"},
                     start_cursor=start_cursor,
                 )
-                results.extend(response.get("results", []))
-                if not response.get("has_more"):
-                    break
-                start_cursor = response.get("next_cursor")
-            logger.debug("Found %d databases", len(results))
-            return results
+            results.extend(response.get("results", []))
+            if not response.get("has_more"):
+                break
+            start_cursor = response.get("next_cursor")
+        logger.debug("Found %d databases", len(results))
+        return results
 
     @retry(
         stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10),
