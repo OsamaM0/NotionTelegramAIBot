@@ -49,14 +49,51 @@ _PEOPLE_VALID_OPS = {"contains", "does_not_contain", "is_empty", "is_not_empty"}
 _PEOPLE_WRITE_TYPES = {"people"}
 
 
+class UserResolutionError(Exception):
+    """Raised when a user name cannot be resolved to a Notion user UUID."""
+
+
+async def _get_available_users_text() -> str:
+    """Fetch all workspace users (and discovered guests) and format them as a readable list."""
+    discovery = _ctx().discovery
+    users = await discovery.list_users()
+    lines = ["Available workspace users:"]
+    seen_ids: set[str] = set()
+    for u in users:
+        name = u.get("name", "Unknown")
+        uid = u.get("id", "")
+        u_type = u.get("type", "")
+        lines.append(f"  - {name} (ID: {uid}, type: {u_type})")
+        if uid:
+            seen_ids.add(uid)
+    # Include extra users discovered from database pages (guests)
+    extra_users = discovery._user_resolver._extra_users
+    if extra_users:
+        guest_lines = []
+        for uid, u in extra_users.items():
+            if uid in seen_ids:
+                continue
+            name = u.get("name", "Unknown")
+            u_type = u.get("type", "")
+            guest_lines.append(f"  - {name} (ID: {uid}, type: {u_type})")
+        if guest_lines:
+            lines.append("Discovered guest users:")
+            lines.extend(guest_lines)
+    if len(lines) == 1:
+        return "No workspace users found."
+    return "\n".join(lines)
+
+
 async def _resolve_people_in_properties(
     property_values: dict[str, Any],
     schema_properties: dict[str, Any],
+    database_id: str | None = None,
 ) -> dict[str, Any]:
     """Resolve people names to UUIDs in property values before writing.
 
     When the LLM passes a people property with names instead of UUIDs,
-    this resolves them via the workspace user list.
+    this resolves them via the workspace user list, falling back to
+    scanning database pages for guest users.
     """
     discovery = _ctx().discovery
     resolved = dict(property_values)
@@ -67,37 +104,154 @@ async def _resolve_people_in_properties(
         prop_schema = schema_properties[prop_name]
         if prop_schema.type not in _PEOPLE_WRITE_TYPES:
             continue
-        if not isinstance(value, list):
+
+        # Normalise to a list: a single string/dict is treated as one person
+        if isinstance(value, dict):
+            value = [value]
+        elif isinstance(value, str):
+            value = [value]
+        elif not isinstance(value, list):
             continue
 
         new_list = []
         for item in value:
-            # Extract the id string from either a dict or plain string
+            # Extract the id or name string from either a dict or plain string
             if isinstance(item, dict):
                 uid = item.get("id", "")
+                name = item.get("name", "")
             else:
                 uid = str(item)
+                name = ""
 
             # If it's already a valid UUID, keep it
-            if _UUID_RE.match(uid):
+            if uid and _UUID_RE.match(uid):
                 new_list.append(item)
             else:
-                # Try to resolve name -> UUID
-                user_id = await discovery.resolve_user_name(uid)
+                # Try to resolve name -> UUID (use name from dict, or uid as name)
+                lookup = name or uid
+                if not lookup:
+                    logger.warning("People item has no id or name, skipping: %s", item)
+                    continue
+                user_id = await discovery.resolve_user_name(lookup)
+                if not user_id and database_id:
+                    user_id = await discovery.resolve_user_from_database(
+                        lookup, database_id, prop_name,
+                    )
                 if user_id:
-                    logger.info("Resolved people property '%s' -> UUID %s", uid, user_id)
+                    logger.info("Resolved people property '%s' -> UUID %s", lookup, user_id)
                     new_list.append({"id": user_id})
                 else:
-                    logger.warning("Could not resolve user name '%s' to UUID, skipping", uid)
+                    users_text = await _get_available_users_text()
+                    raise UserResolutionError(
+                        f"Could not resolve user name '{lookup}'. "
+                        f"Please choose from the following:\n{users_text}"
+                    )
         resolved[prop_name] = new_list
 
     return resolved
 
 
-async def _resolve_people_filter(f: dict[str, Any]) -> dict[str, Any]:
+class RelationResolutionError(Exception):
+    """Raised when a relation value cannot be resolved to a page UUID."""
+
+
+async def _resolve_relation_value(database_id: str, display_value: str) -> str | None:
+    """Try to find a page UUID from a display value like 'TM-197' or a page title."""
+    operations = _ctx().operations
+    discovery = _ctx().discovery
+
+    # Check if it looks like a unique_id pattern (PREFIX-NUMBER)
+    match = re.match(r'^([A-Za-z]+)[- ](\d+)$', display_value.strip())
+    if match:
+        number = int(match.group(2))
+        schema = await discovery.get_database_schema(database_id)
+        for prop_name, prop_schema in schema.properties.items():
+            if prop_schema.type == "unique_id":
+                filter_obj = build_filter(prop_name, "unique_id", "equals", number)
+                pages = await operations.search_pages(database_id, filter_obj, max_results=1)
+                if pages:
+                    logger.info("Resolved relation '%s' -> page UUID %s", display_value, pages[0].id)
+                    return pages[0].id
+                break
+
+    # Fallback: try searching by title
+    schema = await discovery.get_database_schema(database_id)
+    for prop_name, prop_schema in schema.properties.items():
+        if prop_schema.type == "title":
+            filter_obj = build_filter(prop_name, "title", "equals", display_value)
+            pages = await operations.search_pages(database_id, filter_obj, max_results=1)
+            if pages:
+                logger.info("Resolved relation '%s' by title -> page UUID %s", display_value, pages[0].id)
+                return pages[0].id
+            break
+
+    return None
+
+
+async def _resolve_relation_in_properties(
+    property_values: dict[str, Any],
+    schema_properties: dict[str, Any],
+) -> dict[str, Any]:
+    """Resolve relation values from display IDs/names to page UUIDs.
+
+    When the LLM passes a relation property with a display ID (e.g., 'TM-197')
+    instead of a UUID, this resolves them by searching the related database.
+    """
+    resolved = dict(property_values)
+
+    for prop_name, value in resolved.items():
+        if prop_name not in schema_properties:
+            continue
+        prop_schema = schema_properties[prop_name]
+        if prop_schema.type != "relation":
+            continue
+
+        # Normalise to a list
+        if isinstance(value, dict):
+            value = [value]
+        elif isinstance(value, str):
+            value = [value]
+        elif not isinstance(value, list):
+            continue
+
+        related_db_id = prop_schema.relation_database_id
+        if not related_db_id:
+            resolved[prop_name] = value
+            continue
+
+        new_list = []
+        for item in value:
+            if isinstance(item, dict):
+                uid = item.get("id", "")
+            else:
+                uid = str(item)
+
+            if uid and _UUID_RE.match(uid):
+                new_list.append({"id": uid})
+            else:
+                lookup = uid
+                if not lookup:
+                    logger.warning("Relation item has no id, skipping: %s", item)
+                    continue
+                page_uuid = await _resolve_relation_value(related_db_id, lookup)
+                if page_uuid:
+                    new_list.append({"id": page_uuid})
+                else:
+                    raise RelationResolutionError(
+                        f"Could not find a page matching '{lookup}' in the related database. "
+                        f"Please provide a valid page UUID or search for the page first "
+                        f"using search_pages with database_id '{related_db_id}'."
+                    )
+        resolved[prop_name] = new_list
+
+    return resolved
+
+
+async def _resolve_people_filter(f: dict[str, Any], database_id: str | None = None) -> dict[str, Any]:
     """Resolve people/created_by/last_edited_by filter values from names to UUIDs.
 
     Also fixes invalid operators (e.g. 'equals' -> 'contains').
+    When database_id is provided, falls back to scanning the database for guest users.
     """
     prop_type = f.get("type", "")
     base_type = prop_type.split(".")[0] if "." in prop_type else prop_type
@@ -123,18 +277,21 @@ async def _resolve_people_filter(f: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, str) and value and not _UUID_RE.match(value):
             discovery = _ctx().discovery
             user_id = await discovery.resolve_user_name(value)
+            if not user_id and database_id:
+                # Fallback: scan database pages for guest users
+                property_name = f.get("property")
+                user_id = await discovery.resolve_user_from_database(
+                    value, database_id, property_name,
+                )
             if user_id:
                 f["value"] = user_id
                 logger.info("Resolved people filter '%s' -> UUID %s", value, user_id)
             else:
-                logger.warning("Could not resolve user name '%s' to a Notion user ID", value)
-                return {
-                    "property": f["property"],
-                    "type": f["type"],
-                    "operator": "is_not_empty",
-                    "value": True,
-                    "_unresolved_user": value,
-                }
+                users_text = await _get_available_users_text()
+                raise UserResolutionError(
+                    f"Could not resolve user name '{value}'. "
+                    f"Please choose from the following:\n{users_text}"
+                )
 
     return f
 
@@ -290,6 +447,10 @@ async def search_pages(
         - formula.number: equals, greater_than, etc.
         - formula.date: before, after, equals, etc.
     - rollup: use dot notation, e.g. "rollup.number" with the same operators as the inner type
+    - unique_id: equals, does_not_equal, greater_than, less_than, greater_than_or_equal_to, less_than_or_equal_to
+        Use the NUMERIC part only as the value (e.g., 197 not "TM-197"). You can also pass
+        the full display ID like "TM-197" and the number will be extracted automatically.
+        Example: {"property": "ID", "type": "unique_id", "operator": "equals", "value": 197}
     - people: contains (user name or UUID), does_not_contain (user name or UUID), is_empty (true), is_not_empty (true)
         For people filters, you can pass the person's display name (e.g. "Osama") as the value.
         The system will automatically resolve it to the correct Notion user ID.
@@ -298,6 +459,7 @@ async def search_pages(
 
     IMPORTANT: The "type" field must exactly match the property type from the database schema.
     For status properties use "status", for select properties use "select" — do NOT mix them.
+    For unique_id properties (like auto-increment IDs), use "unique_id" as the type — NEVER use "rich_text" or "title".
     For formula properties, you MUST use dot notation: "formula.checkbox", "formula.date", etc.
     Guess the formula return type from the property name (e.g. "Past due" → formula.checkbox,
     "Total" → formula.number, "Full name" → formula.string).
@@ -313,12 +475,14 @@ async def search_pages(
             filter_list = json.loads(filters)
             notion_filters = []
             for f in filter_list:
-                resolved = await _resolve_people_filter(f)
+                resolved = await _resolve_people_filter(f, database_id=database_id)
                 notion_filters.append(
                     build_filter(resolved["property"], resolved["type"], resolved["operator"], resolved["value"])
                 )
             if notion_filters:
                 filter_obj = build_compound_filter(notion_filters)
+        except UserResolutionError as e:
+            return str(e)
         except (json.JSONDecodeError, KeyError) as e:
             return f"Error parsing filters: {e}. Please provide valid filter JSON."
 
@@ -373,7 +537,12 @@ async def create_page(database_id: str, properties_json: str) -> str:
             - Checkbox: {"Done": true}
             - Date: {"Due Date": "2024-01-15"} or {"Due Date": {"start": "2024-01-15", "end": "2024-01-20"}}
             - Multi-select: {"Tags": ["urgent", "bug"]}
+            - Relation: {"Parent task": [{"id": "<page-uuid>"}]} — MUST be a list of objects with page UUIDs.
+              You can also pass the page's display ID (e.g., "TM-197") and it will be auto-resolved.
+            - People: {"Assignee": [{"id": "<user-uuid>"}]} or [{"id": "User Name"}]
 
+    IMPORTANT for relation properties: Always provide a LIST of objects, e.g. [{"id": "..."}].
+    If you only know the display ID (like "TM-197"), pass it as the id and it will be resolved automatically.
     Before calling this, use get_database_schema to know the available properties and their types.
     Always confirm with the user what values to set before creating.
     """
@@ -387,9 +556,12 @@ async def create_page(database_id: str, properties_json: str) -> str:
     try:
         discovery = _ctx().discovery
         schema = await discovery.get_database_schema(database_id)
-        property_values = await _resolve_people_in_properties(property_values, schema.properties)
+        property_values = await _resolve_people_in_properties(property_values, schema.properties, database_id)
+        property_values = await _resolve_relation_in_properties(property_values, schema.properties)
         page = await operations.create_page(database_id, property_values)
         return f"✅ Page created successfully!\nID: `{page.id}`\nURL: {page.url}"
+    except (UserResolutionError, RelationResolutionError) as e:
+        return str(e)
     except Exception as e:
         logger.exception("create_page tool failed for database %s", database_id)
         err_str = str(e)
@@ -425,9 +597,12 @@ async def update_page(page_id: str, database_id: str, properties_json: str) -> s
     try:
         discovery = _ctx().discovery
         schema = await discovery.get_database_schema(database_id)
-        property_values = await _resolve_people_in_properties(property_values, schema.properties)
+        property_values = await _resolve_people_in_properties(property_values, schema.properties, database_id)
+        property_values = await _resolve_relation_in_properties(property_values, schema.properties)
         page = await operations.update_page(page_id, database_id, property_values)
         return f"✅ Page updated successfully!\nID: `{page.id}`"
+    except (UserResolutionError, RelationResolutionError) as e:
+        return str(e)
     except Exception as e:
         logger.exception("update_page tool failed for page %s", page_id)
         err_str = str(e)
@@ -487,12 +662,14 @@ async def count_pages(
             filter_list = json.loads(filters)
             notion_filters = []
             for f in filter_list:
-                resolved = await _resolve_people_filter(f)
+                resolved = await _resolve_people_filter(f, database_id=database_id)
                 notion_filters.append(
                     build_filter(resolved["property"], resolved["type"], resolved["operator"], resolved["value"])
                 )
             if notion_filters:
                 filter_obj = build_compound_filter(notion_filters)
+        except UserResolutionError as e:
+            return str(e)
         except (json.JSONDecodeError, KeyError) as e:
             return f"Error parsing filters: {e}. Please provide valid filter JSON."
 

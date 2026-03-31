@@ -165,6 +165,15 @@ class NotionClientWrapper:
         logger.debug("Found %d users", len(results))
         return results
 
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10),
+        retry=retry_if_exception(_is_retryable), reraise=True,
+    )
+    async def retrieve_user(self, user_id: str) -> dict[str, Any]:
+        """Retrieve a single user by ID (works for members and guests)."""
+        async with _RATE_LIMIT:
+            return await self._client.users.retrieve(user_id=user_id)
+
     # --- Blocks (page content) ---
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)

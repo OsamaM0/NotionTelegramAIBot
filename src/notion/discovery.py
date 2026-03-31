@@ -97,6 +97,12 @@ class DatabaseDiscovery:
         """Resolve a user display name to a Notion user UUID. Delegates to UserResolver."""
         return await self._user_resolver.resolve_user_name(name)
 
+    async def resolve_user_from_database(
+        self, name: str, database_id: str, property_name: str | None = None,
+    ) -> str | None:
+        """Resolve a user name by scanning database pages (finds guests). Delegates to UserResolver."""
+        return await self._user_resolver.resolve_user_from_database(name, database_id, property_name)
+
     async def _probe_formula_return_types(self, db_info: DatabaseInfo) -> None:
         """Query one page from the database to detect formula property return types."""
         formula_props = [p for p in db_info.properties.values() if p.type == "formula"]
