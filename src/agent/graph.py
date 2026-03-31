@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 def _build_graph(
     llm_with_tools, tools: list, memory: ConversationMemory,
     discovery: DatabaseDiscovery, platform: PlatformConfig,
+    database: Database,
 ) -> Any:
     """Compile a LangGraph StateGraph for a given tool-set."""
     tool_node = ToolNode(tools, handle_tool_errors=True)
@@ -37,7 +38,9 @@ def _build_graph(
         if active_db:
             db_info = discovery.get_cached_schema(active_db[0])
             if db_info:
-                db_schema_str = format_schema_for_llm(db_info)
+                # Custom description is stored in state, looked up in process_message
+                custom_desc = state.custom_descriptions.get(active_db[0], "") if state.custom_descriptions else ""
+                db_schema_str = format_schema_for_llm(db_info, custom_description=custom_desc or None)
 
         system_prompt = build_system_prompt(
             user_role=state.user_role,
@@ -100,13 +103,13 @@ class NotionAgent:
 
         self._graphs: dict[str, Any] = {
             "admin": _build_graph(
-                llm.bind_tools(self._all_tools), self._all_tools, memory, discovery, self._platform,
+                llm.bind_tools(self._all_tools), self._all_tools, memory, discovery, self._platform, database,
             ),
             "user": _build_graph(
-                llm.bind_tools(self._all_tools), self._all_tools, memory, discovery, self._platform,
+                llm.bind_tools(self._all_tools), self._all_tools, memory, discovery, self._platform, database,
             ),
             "viewer": _build_graph(
-                llm.bind_tools(self._readonly_tools), self._readonly_tools, memory, discovery, self._platform,
+                llm.bind_tools(self._readonly_tools), self._readonly_tools, memory, discovery, self._platform, database,
             ),
         }
 
@@ -122,12 +125,17 @@ class NotionAgent:
             operations=self._operations,
             memory=self._memory,
             user_id=user_id,
+            database=self._database,
         ))
         self._memory.add_user_message(user_id, message)
 
         # Accessible databases
         accessible_dbs = await self._get_accessible_databases(user_id, user_role)
-        available_databases = [(db.id, db.title) for db in accessible_dbs]
+        custom_descriptions = await self._database.list_db_descriptions()
+        available_databases = [
+            (db.id, db.title, custom_descriptions.get(db.id, ""))
+            for db in accessible_dbs
+        ]
 
         active_db = self._memory.get_active_database(user_id)
 
@@ -153,6 +161,7 @@ class NotionAgent:
             active_database_name=active_db[1] if active_db else None,
             effective_permissions=effective_permissions,
             available_databases=available_databases,
+            custom_descriptions=custom_descriptions,
         )
 
         try:

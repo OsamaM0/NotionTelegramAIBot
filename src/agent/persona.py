@@ -89,7 +89,7 @@ def build_system_prompt(
     active_db_name: str | None = None,
     active_db_schema: str | None = None,
     effective_permissions: dict[str, list[str]] | None = None,
-    available_databases: list[tuple[str, str]] | None = None,
+    available_databases: list[tuple[str, str]] | list[tuple[str, str, str]] | None = None,
 ) -> str:
     """Build the full system prompt with dynamic context.
 
@@ -100,8 +100,8 @@ def build_system_prompt(
         active_db_schema: Formatted schema of the active database.
         effective_permissions: For non-admin users, a dict mapping database names
             to their permission list, e.g. {"Sales DB": ["read","create"]}.
-        available_databases: List of (db_id, db_name) tuples for all databases the
-            user can access.
+        available_databases: List of (db_id, db_name) or (db_id, db_name, custom_description)
+            tuples for all databases the user can access.
     """
     ds = platform.datasource_label
     ds_plural = platform.datasource_label_plural
@@ -121,8 +121,14 @@ def build_system_prompt(
 
     if available_databases:
         lines = [f"\n## Available {ds_plural.capitalize()}"]
-        for db_id, db_name in available_databases:
-            lines.append(f"- {db_name} (ID: `{db_id}`)")
+        for db_tuple in available_databases:
+            db_id = db_tuple[0]
+            db_name = db_tuple[1]
+            custom_desc = db_tuple[2] if len(db_tuple) > 2 else ""
+            line = f"- {db_name} (ID: `{db_id}`)"
+            if custom_desc:
+                line += f"\n  Context: {custom_desc}"
+            lines.append(line)
         if not active_db_name:
             lines.append(
                 f"\nNo {ds} is currently active. If the user's request clearly refers to one "

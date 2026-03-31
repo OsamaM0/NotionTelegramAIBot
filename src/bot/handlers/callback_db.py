@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from aiogram import Bot, Router
 from aiogram.enums import ChatAction
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from src.bot.keyboards import (
     back_keyboard,
@@ -22,13 +23,24 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
+# In-memory state for pending description edits (keyed by user_id)
+_pending_description: dict[int, dict] = {}
+_PENDING_MAX_AGE = 600  # seconds
+
+
+def _cleanup_pending_descriptions() -> None:
+    now = time.monotonic()
+    expired = [uid for uid, entry in _pending_description.items() if now - entry.get("_ts", 0) > _PENDING_MAX_AGE]
+    for uid in expired:
+        del _pending_description[uid]
+
 
 async def _get_db_action_keyboard(user_role: str, user_id: int, db_id: str, database: Database, platform=None):
     """Build the correct action keyboard based on the user's actual permissions for this DB."""
     v = vocab(platform)
     kw = dict(ds_label=v["DS_plural"], entries_label=v["entries"], entry_label=v["entry"])
     if user_role == "admin":
-        return database_actions_keyboard(**kw)
+        return database_actions_keyboard(**kw, show_describe=True)
     perms = await database.get_user_permissions_for_db(user_id, db_id)
     has_write = bool(perms & {"create", "update", "delete"})
     if has_write:
@@ -131,10 +143,14 @@ async def handle_select_db(
 
     kb = await _get_db_action_keyboard(user_role, callback.from_user.id, selected.id, database, platform)
 
+    custom_desc = await database.get_db_description(selected.id)
+    desc_line = f"\n📝 Description: _{custom_desc}_\n" if custom_desc else ""
+
     await safe_send(
         callback,
         f"✅ Active {v['ds']}: *{selected.title}*\n\n"
-        f"Properties: {props}\n\n"
+        f"Properties: {props}\n"
+        f"{desc_line}\n"
         f"What would you like to do?{access_warning}",
         reply_markup=kb,
     )
@@ -153,6 +169,50 @@ async def handle_db_action(
     """Handle quick-action buttons after selecting a database."""
     v = vocab(platform)
     action = callback.data.split(":")[1]
+
+    # Handle describe action locally (admin-only, no agent needed)
+    if action == "describe":
+        if user_role != "admin":
+            await callback.answer("⛔ Admin only.", show_alert=True)
+            return
+        active_db = agent.get_active_database(callback.from_user.id)
+        if not active_db:
+            await callback.answer("No database selected.", show_alert=True)
+            return
+        db_id, db_name = active_db
+        current_desc = await database.get_db_description(db_id)
+        _cleanup_pending_descriptions()
+        _pending_description[callback.from_user.id] = {
+            "db_id": db_id,
+            "db_name": db_name,
+            "step": "awaiting_description",
+            "_ts": time.monotonic(),
+        }
+        if current_desc:
+            msg = (
+                f"📝 *Custom Description for {db_name}*\n\n"
+                f"Current description:\n_{current_desc}_\n\n"
+                "Send a new description to replace it, or tap *🗑 Clear* to remove it."
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🗑 Clear description", callback_data=f"db_desc_clear:{db_id}")],
+                [InlineKeyboardButton(text="🔙 Cancel", callback_data="db_desc_cancel")],
+            ])
+        else:
+            msg = (
+                f"📝 *Set Description for {db_name}*\n\n"
+                f"Send a custom description, usage examples, or additional context "
+                f"to help the AI understand this {v['ds']} better.\n\n"
+                f"_Example: \"This database tracks customer support tickets. "
+                f"Each entry represents a ticket with priority, status, and assignee. "
+                f"Use 'Status: Open' to find active tickets.\"_"
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Cancel", callback_data="db_desc_cancel")],
+            ])
+        await callback.answer()
+        await safe_send(callback, msg, reply_markup=kb)
+        return
 
     prompts = {
         "search": f"Show me the recent {v['entries']} in this {v['ds']}.",
@@ -186,3 +246,89 @@ async def handle_db_action(
         kb = None
 
     await safe_send(callback.message, response, reply_markup=kb)
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("db_desc_clear:"))
+async def handle_db_desc_clear(
+    callback: CallbackQuery,
+    user_role: str,
+    database: Database,
+    agent,
+    platform=None,
+    **kwargs,
+) -> None:
+    """Clear the custom description for a database."""
+    if user_role != "admin":
+        await callback.answer("⛔ Admin only.", show_alert=True)
+        return
+    db_id = callback.data.split(":")[1]
+    _pending_description.pop(callback.from_user.id, None)
+    deleted = await database.delete_db_description(db_id)
+    if deleted:
+        await callback.answer("✅ Description cleared.")
+        active_db = agent.get_active_database(callback.from_user.id)
+        db_name = active_db[1] if active_db else db_id
+        kb = await _get_db_action_keyboard(user_role, callback.from_user.id, db_id, database, platform)
+        await safe_send(callback, f"✅ Custom description for *{db_name}* has been cleared.", reply_markup=kb)
+    else:
+        await callback.answer("No description to clear.", show_alert=True)
+
+
+@router.callback_query(lambda c: c.data == "db_desc_cancel")
+async def handle_db_desc_cancel(
+    callback: CallbackQuery,
+    user_role: str,
+    database: Database,
+    agent,
+    platform=None,
+    **kwargs,
+) -> None:
+    """Cancel the description editing flow."""
+    _pending_description.pop(callback.from_user.id, None)
+    await callback.answer("Cancelled.")
+    active_db = agent.get_active_database(callback.from_user.id)
+    if active_db:
+        kb = await _get_db_action_keyboard(user_role, callback.from_user.id, active_db[0], database, platform)
+        await safe_send(callback, f"✅ Active database: *{active_db[1]}*", reply_markup=kb)
+
+
+async def handle_description_text_input(
+    message, database: Database, platform=None,
+) -> bool:
+    """Handle text input during the description editing flow.
+
+    Returns True if the message was consumed, False otherwise.
+    """
+    user_id = message.from_user.id
+    pending = _pending_description.get(user_id)
+    if not pending:
+        return False
+
+    v = vocab(platform)
+    step = pending.get("step")
+    text = message.text.strip()
+
+    if step == "awaiting_description":
+        db_id = pending["db_id"]
+        db_name = pending["db_name"]
+        _pending_description.pop(user_id, None)
+
+        # Enforce max length
+        if len(text) > 1000:
+            await message.answer(
+                f"⚠️ Description is too long ({len(text)} chars). Maximum is 1000 characters.\n"
+                "Please send a shorter description.",
+            )
+            # Re-enter the pending state
+            _pending_description[user_id] = pending
+            return True
+
+        await database.set_db_description(db_id, text, user_id)
+        await message.answer(
+            f"✅ Custom description for *{db_name}* saved!\n\n"
+            f"_{text}_",
+            parse_mode="Markdown",
+        )
+        return True
+
+    return False

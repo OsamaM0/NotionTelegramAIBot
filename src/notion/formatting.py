@@ -4,11 +4,13 @@ from __future__ import annotations
 from src.notion.models import DatabaseInfo
 
 
-def format_schema_for_llm(db_info: DatabaseInfo) -> str:
+def format_schema_for_llm(db_info: DatabaseInfo, custom_description: str | None = None) -> str:
     """Format a database schema as a readable string for the LLM."""
     lines = [f"Database: {db_info.title}"]
     if db_info.description:
         lines.append(f"Description: {db_info.description}")
+    if custom_description:
+        lines.append(f"Custom Context: {custom_description}")
     lines.append(f"ID: {db_info.id}")
     lines.append("Properties:")
     for prop_name, prop_schema in db_info.properties.items():

@@ -39,6 +39,15 @@ CREATE TABLE IF NOT EXISTS user_rules (
 );
 """
 
+CREATE_DATABASE_DESCRIPTIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS database_descriptions (
+    database_id TEXT PRIMARY KEY,
+    custom_description TEXT NOT NULL,
+    updated_by INTEGER,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 
 class Database:
     """SQLite database connection and initialization."""
@@ -48,6 +57,7 @@ class Database:
         self._db: aiosqlite.Connection | None = None
         self.users: UserRepository | None = None
         self.rules: RuleRepository | None = None
+        self.descriptions: DatabaseDescriptionRepository | None = None
 
     async def initialize(self) -> None:
         """Create tables and initialize the database."""
@@ -57,10 +67,12 @@ class Database:
         await self._db.execute(CREATE_USERS_TABLE)
         await self._db.execute(CREATE_RULES_TABLE)
         await self._db.execute(CREATE_USER_RULES_TABLE)
+        await self._db.execute(CREATE_DATABASE_DESCRIPTIONS_TABLE)
         await self._migrate_telegram_id()
         await self._db.commit()
         self.users = UserRepository(self._db)
         self.rules = RuleRepository(self._db)
+        self.descriptions = DatabaseDescriptionRepository(self._db)
         logger.info("Database initialized at %s", self._db_path)
 
     async def _migrate_telegram_id(self) -> None:
@@ -140,6 +152,18 @@ class Database:
 
     async def get_user_allowed_db_ids(self, user_id: int) -> set[str]:
         return await self.rules.get_user_allowed_db_ids(user_id)
+
+    async def get_db_description(self, database_id: str) -> str | None:
+        return await self.descriptions.get_description(database_id)
+
+    async def set_db_description(self, database_id: str, description: str, updated_by: int) -> None:
+        return await self.descriptions.set_description(database_id, description, updated_by)
+
+    async def delete_db_description(self, database_id: str) -> bool:
+        return await self.descriptions.delete_description(database_id)
+
+    async def list_db_descriptions(self) -> dict[str, str]:
+        return await self.descriptions.list_descriptions()
 
 
 class UserRepository:
@@ -386,3 +410,50 @@ class RuleRepository:
         ) as cursor:
             rows = await cursor.fetchall()
             return {row[0] for row in rows}
+
+
+class DatabaseDescriptionRepository:
+    """CRUD operations for custom database descriptions."""
+
+    def __init__(self, db: aiosqlite.Connection) -> None:
+        self._db = db
+
+    async def get_description(self, database_id: str) -> str | None:
+        """Get the custom description for a database, or None."""
+        async with self._db.execute(
+            "SELECT custom_description FROM database_descriptions WHERE database_id = ?",
+            (database_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+    async def set_description(self, database_id: str, description: str, updated_by: int) -> None:
+        """Set or update the custom description for a database (upsert)."""
+        await self._db.execute(
+            "INSERT INTO database_descriptions (database_id, custom_description, updated_by, updated_at) "
+            "VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(database_id) DO UPDATE SET "
+            "custom_description = excluded.custom_description, "
+            "updated_by = excluded.updated_by, "
+            "updated_at = CURRENT_TIMESTAMP",
+            (database_id, description, updated_by),
+        )
+        await self._db.commit()
+        logger.info("Set custom description for database %s by user %d", database_id, updated_by)
+
+    async def delete_description(self, database_id: str) -> bool:
+        """Delete the custom description for a database."""
+        cursor = await self._db.execute(
+            "DELETE FROM database_descriptions WHERE database_id = ?",
+            (database_id,),
+        )
+        await self._db.commit()
+        return cursor.rowcount > 0
+
+    async def list_descriptions(self) -> dict[str, str]:
+        """Get all custom descriptions as {database_id: description}."""
+        async with self._db.execute(
+            "SELECT database_id, custom_description FROM database_descriptions"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return {row[0]: row[1] for row in rows}

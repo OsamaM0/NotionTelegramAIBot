@@ -7,6 +7,7 @@ from aiogram.enums import ChatAction
 from aiogram.types import Message
 
 from src.bot.handlers.rules import handle_rule_text_input
+from src.bot.handlers.callback_db import handle_description_text_input
 from src.bot.keyboards import chat_keyboard, confirm_action_keyboard
 from src.bot.pending_state import (
     clear_confirmation,
@@ -38,6 +39,12 @@ async def handle_text_message(
     # Check if a rule management flow is waiting for text input
     if user_role == "admin":
         consumed = await handle_rule_text_input(message, database, discovery, platform)
+        if consumed:
+            return
+
+    # Check if a description editing flow is waiting for text input
+    if user_role == "admin":
+        consumed = await handle_description_text_input(message, database, platform)
         if consumed:
             return
 

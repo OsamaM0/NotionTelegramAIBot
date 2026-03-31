@@ -16,4 +16,5 @@ class AgentState(BaseModel):
     active_database_id: str | None = None
     active_database_name: str | None = None
     effective_permissions: dict[str, list[str]] | None = None
-    available_databases: list[tuple[str, str]] | None = None
+    available_databases: list[tuple[str, str]] | list[tuple[str, str, str]] | None = None
+    custom_descriptions: dict[str, str] | None = None

@@ -81,6 +81,7 @@ def database_actions_keyboard(
     ds_label: str = _DS,
     entries_label: str = _ENTRIES,
     entry_label: str = _ENTRY,
+    show_describe: bool = False,
 ) -> InlineKeyboardMarkup:
     """Quick-action buttons shown after a database is selected."""
     buttons = [
@@ -92,11 +93,17 @@ def database_actions_keyboard(
             InlineKeyboardButton(text="📊 View schema", callback_data="db_action:schema"),
             InlineKeyboardButton(text=f"🔢 Count {entries_label}", callback_data="db_action:count"),
         ],
+    ]
+    if show_describe:
+        buttons.append(
+            [InlineKeyboardButton(text="📝 Set description", callback_data="db_action:describe")]
+        )
+    buttons.append(
         [
             InlineKeyboardButton(text=f"📋 {ds_label}", callback_data="menu:databases"),
             InlineKeyboardButton(text="🔙 Main Menu", callback_data="nav:main"),
         ],
-    ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

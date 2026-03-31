@@ -27,6 +27,7 @@ class ToolContext:
     operations: NotionOperations
     memory: ConversationMemory
     user_id: int
+    database: object | None = None  # Database instance for custom descriptions
 
 
 _tool_context: contextvars.ContextVar[ToolContext] = contextvars.ContextVar("tool_context")
@@ -382,11 +383,20 @@ async def list_databases() -> str:
     if not databases:
         return "No databases found. Make sure databases are shared with the Notion integration."
 
+    # Fetch custom descriptions if available
+    custom_descriptions: dict[str, str] = {}
+    db_instance = _ctx().database
+    if db_instance and hasattr(db_instance, "list_db_descriptions"):
+        custom_descriptions = await db_instance.list_db_descriptions()
+
     lines = ["Available databases:\n"]
     for i, db in enumerate(databases, 1):
         line = f"{i}. *{db.title}*"
         if db.description:
             line += f" — {db.description}"
+        custom_desc = custom_descriptions.get(db.id, "")
+        if custom_desc:
+            line += f"\n   Context: {custom_desc}"
         line += f"\n   ID: `{db.id}`"
         lines.append(line)
 
