@@ -6,13 +6,13 @@ from aiogram import F, Router
 from aiogram.enums import ChatAction
 from aiogram.types import BufferedInputFile, Message
 
-from src.bot.keyboards import confirm_action_keyboard
+from src.bot.keyboards import chat_keyboard, confirm_action_keyboard
 from src.bot.pending_state import (
     clear_confirmation,
     detect_confirmation,
     store_confirmation,
 )
-from src.bot.utils import get_contextual_keyboard, safe_send
+from src.bot.utils import safe_send
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ async def handle_voice_message(
     # Send text response with contextual buttons
     kb = _pick_voice_keyboard(agent, user_id, user_role, response)
     if kb is None:
-        kb = await get_contextual_keyboard(user_role, user_id, agent, database, kwargs.get('platform'))
+        kb = chat_keyboard()
     await safe_send(message, response, reply_markup=kb)
 
     # Also send voice response
@@ -110,7 +110,7 @@ async def handle_audio_message(
     response = await agent.process_message(user_id, user_role, transcribed_text)
     kb = _pick_voice_keyboard(agent, user_id, user_role, response)
     if kb is None:
-        kb = await get_contextual_keyboard(user_role, user_id, agent, database, kwargs.get('platform'))
+        kb = chat_keyboard()
     await safe_send(message, response, reply_markup=kb)
 
     try:

@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: str
-    openai_model: str = "gpt-4o-mini"
+    openai_model: str = "gpt-5-nano"
     openai_tts_model: str = "tts-1"
     openai_tts_voice: str = "alloy"
     openai_whisper_model: str = "whisper-1"

@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery
 
 from src.bot.keyboards import (
     back_keyboard,
+    chat_keyboard,
     confirm_action_keyboard,
     edit_fields_keyboard,
     main_menu_keyboard,
@@ -45,8 +46,10 @@ async def handle_action_confirm(
     if fields:
         store_confirmation(user_id, response, fields)
         kb = confirm_action_keyboard()
-    else:
+    elif response.lstrip().startswith("✅"):
         kb = back_keyboard()
+    else:
+        kb = chat_keyboard()
 
     await safe_send(callback.message, response, reply_markup=kb)
 

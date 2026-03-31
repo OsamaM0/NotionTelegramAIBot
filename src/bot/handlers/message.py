@@ -7,7 +7,7 @@ from aiogram.enums import ChatAction
 from aiogram.types import Message
 
 from src.bot.handlers.rules import handle_rule_text_input
-from src.bot.keyboards import confirm_action_keyboard
+from src.bot.keyboards import chat_keyboard, confirm_action_keyboard
 from src.bot.pending_state import (
     clear_confirmation,
     detect_confirmation,
@@ -15,7 +15,7 @@ from src.bot.pending_state import (
     set_editing_field,
     store_confirmation,
 )
-from src.bot.utils import get_contextual_keyboard, safe_send
+from src.bot.utils import safe_send
 from src.db.database import Database
 
 logger = logging.getLogger(__name__)
@@ -52,15 +52,15 @@ async def handle_text_message(
 
     response = await agent.process_message(user_id, user_role, text)
 
-    # Detect confirmation prompts and attach Confirm / Edit / Discard buttons
+    # Detect confirmation prompts — store state but use contextual keyboard
+    # so the user confirms by typing in chat (not pressing a button)
     fields = detect_confirmation(response)
     if fields:
         logger.info("Detected confirmation prompt for user %d with %d fields", user_id, len(fields))
         store_confirmation(user_id, response, fields)
         kb = confirm_action_keyboard()
     else:
-        clear_confirmation(user_id)
-        kb = await get_contextual_keyboard(user_role, user_id, agent, database, platform)
+        kb = chat_keyboard()
 
     # Split long messages (respecting platform limit)
     char_limit = platform.message_char_limit if platform else 4096

@@ -21,6 +21,22 @@ def build_filter(property_name: str, property_type: str, operator: str, value: A
             "property": property_name,
             outer_type: {inner_type: {operator: value}},
         }
+    # Handle unique_id: extract numeric part from values like "TM-197"
+    if property_type == "unique_id":
+        if isinstance(value, str):
+            import re
+            match = re.search(r"(\d+)$", value)
+            if match:
+                value = int(match.group(1))
+            else:
+                try:
+                    value = int(value)
+                except (ValueError, TypeError):
+                    pass
+        return {
+            "property": property_name,
+            "unique_id": {operator: value},
+        }
     return {
         "property": property_name,
         property_type: {operator: value},
@@ -169,6 +185,11 @@ def build_property_value(property_type: str, value: Any) -> dict[str, Any]:
 
     if property_type == "date" and isinstance(value, dict):
         return builder(start=value.get("start", ""), end=value.get("end"))
-    if property_type in ("multi_select", "people", "relation") and isinstance(value, list):
+    # Normalize relation/people: wrap single dict or string in a list
+    if property_type in ("relation", "people"):
+        if isinstance(value, (dict, str)):
+            value = [value]
+        return builder(value)
+    if property_type == "multi_select" and isinstance(value, list):
         return builder(value)
     return builder(value)

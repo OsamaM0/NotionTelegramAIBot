@@ -22,5 +22,9 @@ def format_schema_for_llm(db_info: DatabaseInfo) -> str:
                 line += f" [returns: {ret}, filter as formula.{ret}]"
             if prop_schema.formula_expression:
                 line += f" [expression: {prop_schema.formula_expression}]"
+        if prop_schema.type == "unique_id" and prop_schema.unique_id_prefix:
+            line += f" [prefix: {prop_schema.unique_id_prefix}, filter as unique_id with numeric value]"
+        if prop_schema.type == "relation" and prop_schema.relation_database_id:
+            line += f" [related DB: {prop_schema.relation_database_id}]"
         lines.append(line)
     return "\n".join(lines)

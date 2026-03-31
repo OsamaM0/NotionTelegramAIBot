@@ -106,6 +106,99 @@ docker-compose up -d
 | **user** | Full CRUD on accessible databases |
 | **viewer** | Read-only (list, search, view) |
 
+## Agent Workflow
+
+```mermaid
+graph TD
+    subgraph Telegram
+        TXT["📝 Text Message"]
+        VCE["🎙️ Voice Message"]
+    end
+
+    subgraph "Bot Layer (aiogram v3)"
+        AUTH["Auth Middleware<br/>(RBAC check)"]
+        MSG_H["Message Handler"]
+        VCE_H["Voice Handler"]
+        STT["Whisper STT"]
+        TTS["OpenAI TTS"]
+    end
+
+    subgraph "LangGraph Agent"
+        START_NODE(("▶ START"))
+        AGENT["🤖 Agent Node<br/>(GPT-4o + System Prompt)"]
+        DECISION{"Tool calls?"}
+        TOOLS["🔧 Tool Node"]
+        END_NODE(("⏹ END"))
+    end
+
+    subgraph "Notion Tools"
+        direction LR
+        T_LS["list_databases"]
+        T_SW["switch_database"]
+        T_SC["get_database_schema"]
+        T_SR["search_pages"]
+        T_CN["count_pages"]
+        T_DT["get_page_details"]
+        T_CR["create_page"]
+        T_UP["update_page"]
+        T_DL["delete_page"]
+    end
+
+    subgraph "External Services"
+        NOTION["Notion API"]
+        MEM["Conversation Memory"]
+        DB["SQLite (RBAC)"]
+    end
+
+    TXT --> AUTH
+    VCE --> AUTH
+    AUTH --> MSG_H
+    AUTH --> VCE_H
+    VCE_H --> STT
+    STT --> MSG_H
+    MSG_H --> START_NODE
+
+    START_NODE --> AGENT
+    AGENT --> DECISION
+    DECISION -- "Yes" --> TOOLS
+    TOOLS --> AGENT
+    DECISION -- "No" --> END_NODE
+
+    TOOLS --> T_LS & T_SW & T_SC & T_SR & T_CN & T_DT & T_CR & T_UP & T_DL
+    T_LS & T_SW & T_SC & T_SR & T_CN & T_DT & T_CR & T_UP & T_DL --> NOTION
+
+    AGENT -. "history" .-> MEM
+    AUTH -. "role lookup" .-> DB
+
+    END_NODE --> MSG_H
+    MSG_H --> VCE_H
+    VCE_H --> TTS
+    TTS --> Telegram
+
+    style START_NODE fill:#2ea44f,color:#fff
+    style END_NODE fill:#d73a49,color:#fff
+    style AGENT fill:#1a73e8,color:#fff
+    style TOOLS fill:#e8710a,color:#fff
+    style DECISION fill:#6f42c1,color:#fff
+```
+
+**Node descriptions:**
+
+| Node | Role |
+|------|------|
+| **Auth Middleware** | Validates Telegram user against SQLite DB; injects `user_role` |
+| **Agent Node** | Constructs a dynamic system prompt (role, active DB schema, permissions) and calls GPT-4o |
+| **Decision** | If the LLM response contains `tool_calls` → route to Tool Node; otherwise → END |
+| **Tool Node** | Executes the requested Notion tool(s) and returns results back to the Agent |
+| **Conversation Memory** | Per-user message history fed into every Agent invocation |
+
+**Role → Tool access:**
+
+| Role | Available Tools |
+|------|----------------|
+| **admin / user** | All 9 tools (full CRUD) |
+| **viewer** | 6 read-only tools (`list_databases`, `switch_database`, `get_database_schema`, `search_pages`, `count_pages`, `get_page_details`) |
+
 ## Project Structure
 
 ```

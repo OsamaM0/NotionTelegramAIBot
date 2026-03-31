@@ -44,6 +44,8 @@ class PropertySchema(BaseModel):
     options: list[SelectOption] = Field(default_factory=list)
     formula_expression: str = ""
     formula_return_type: str = ""
+    relation_database_id: str = ""
+    unique_id_prefix: str = ""
 
     @classmethod
     def from_notion(cls, name: str, prop: dict[str, Any]) -> PropertySchema:
@@ -58,7 +60,18 @@ class PropertySchema(BaseModel):
         formula_expression = ""
         if prop_type == "formula":
             formula_expression = prop.get("formula", {}).get("expression", "")
-        return cls(name=name, type=prop_type, options=options, formula_expression=formula_expression)
+        relation_database_id = ""
+        if prop_type == "relation":
+            relation_database_id = prop.get("relation", {}).get("database_id", "")
+        unique_id_prefix = ""
+        if prop_type == "unique_id":
+            unique_id_prefix = prop.get("unique_id", {}).get("prefix", "")
+        return cls(
+            name=name, type=prop_type, options=options,
+            formula_expression=formula_expression,
+            relation_database_id=relation_database_id,
+            unique_id_prefix=unique_id_prefix,
+        )
 
 
 class DatabaseInfo(BaseModel):

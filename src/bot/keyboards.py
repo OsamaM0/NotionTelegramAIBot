@@ -168,6 +168,18 @@ def help_keyboard(user_role: str = "user") -> InlineKeyboardMarkup:
 
 # ── Confirm / Edit / Discard ────────────────────────────────────────────────
 
+def chat_keyboard() -> InlineKeyboardMarkup:
+    """Simple Ok / Edit / Cancel buttons shown during normal chat."""
+    buttons = [
+        [
+            InlineKeyboardButton(text="✅ Ok", callback_data="action:confirm"),
+            InlineKeyboardButton(text="✏️ Edit", callback_data="action:edit"),
+            InlineKeyboardButton(text="❌ Cancel", callback_data="action:discard"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def confirm_action_keyboard() -> InlineKeyboardMarkup:
     """Buttons shown when the agent asks the user to confirm an action."""
     buttons = [
