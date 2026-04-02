@@ -299,15 +299,10 @@ async def _resolve_people_filter(f: dict[str, Any], database_id: str | None = No
 
 @tool
 async def switch_database(database_name: str) -> str:
-    """Switch the active database to a different one by name or ID.
+    """Switch active database by name or ID.
 
     Args:
-        database_name: The name (or partial name) or ID of the database to switch to.
-
-    Use this when the user's request clearly refers to a specific database that is different
-    from the currently active one, or when no database is currently active and you can
-    determine which one the user means. If the name matches multiple databases and it's
-    ambiguous, report the options and ask the user to be more specific.
+        database_name: Name (or partial name) or ID of the database.
     """
     discovery = _ctx().discovery
     user_id = _ctx().user_id
@@ -372,11 +367,7 @@ async def switch_database(database_name: str) -> str:
 
 @tool
 async def list_databases() -> str:
-    """List all Notion databases accessible to the bot.
-
-    Returns a formatted list of databases with their names, descriptions, and IDs.
-    Use this when the user wants to see available databases or select one to work with.
-    """
+    """List all accessible databases with names, descriptions, and IDs."""
     discovery = _ctx().discovery
     databases = await discovery.list_databases()
 
@@ -405,13 +396,10 @@ async def list_databases() -> str:
 
 @tool
 async def get_database_schema(database_id: str) -> str:
-    """Get the schema (fields/properties) of a specific Notion database.
+    """Get the schema (properties and their types) of a database.
 
     Args:
-        database_id: The ID of the database to retrieve the schema for.
-
-    Returns the database name and all its properties with their types and available options.
-    Use this to understand the structure before creating or querying pages.
+        database_id: Database ID.
     """
     discovery = _ctx().discovery
     try:
@@ -430,51 +418,16 @@ async def search_pages(
     sort_direction: str = "ascending",
     max_results: int = 10,
 ) -> str:
-    """Search and query pages in a Notion database with optional filters and sorting.
+    """Search pages in a database with optional filters and sorting.
 
     Args:
-        database_id: The ID of the database to search in.
-        filters: JSON string of filter conditions. Format:
-            [{"property": "Name", "type": "rich_text",
-              "operator": "contains", "value": "search term"}].
-            Set to null for no filters.
-        sort_property: Property name to sort by. Set to null for default order.
-        sort_direction: Sort direction - "ascending" or "descending".
-        max_results: Maximum number of results to return (default 10, max 50).
+        database_id: Database ID to search.
+        filters: JSON array of filter objects, e.g. [{"property":"Name","type":"rich_text","operator":"contains","value":"test"}]. Set null for no filters.
+        sort_property: Property name to sort by, or null.
+        sort_direction: "ascending" or "descending".
+        max_results: Max results (default 10, max 50).
 
-    Use this to find specific entries or list entries from a database.
-    Common filter operators by type:
-    - title: equals, does_not_equal, contains, does_not_contain, starts_with, ends_with, is_empty, is_not_empty
-    - rich_text: equals, does_not_equal, contains, does_not_contain, starts_with, ends_with, is_empty, is_not_empty
-    - number: equals, does_not_equal, greater_than, less_than, greater_than_or_equal_to, less_than_or_equal_to
-    - select: equals, does_not_equal
-    - status: equals, does_not_equal
-    - checkbox: equals (true/false)
-    - date: equals, before, after, on_or_before, on_or_after, is_empty, is_not_empty
-    - formula: use dot notation with the formula's RETURN type, e.g.:
-        - formula.checkbox: equals (true/false)
-        - formula.string: contains, equals, etc.
-        - formula.number: equals, greater_than, etc.
-        - formula.date: before, after, equals, etc.
-    - rollup: use dot notation, e.g. "rollup.number" with the same operators as the inner type
-    - unique_id: equals, does_not_equal, greater_than, less_than, greater_than_or_equal_to, less_than_or_equal_to
-        Use the NUMERIC part only as the value (e.g., 197 not "TM-197"). You can also pass
-        the full display ID like "TM-197" and the number will be extracted automatically.
-        Example: {"property": "ID", "type": "unique_id", "operator": "equals", "value": 197}
-    - people: contains (user name or UUID), does_not_contain (user name or UUID), is_empty (true), is_not_empty (true)
-        For people filters, you can pass the person's display name (e.g. "Osama") as the value.
-        The system will automatically resolve it to the correct Notion user ID.
-        Example: {"property": "Responsible", "type": "people", "operator": "contains", "value": "Osama"}
-    - created_by / last_edited_by: contains (user name or UUID), does_not_contain, is_empty, is_not_empty
-
-    IMPORTANT: The "type" field must exactly match the property type from the database schema.
-    For status properties use "status", for select properties use "select" — do NOT mix them.
-    For unique_id properties (like auto-increment IDs), use "unique_id" as the type — NEVER use "rich_text" or "title".
-    For formula properties, you MUST use dot notation: "formula.checkbox", "formula.date", etc.
-    Guess the formula return type from the property name (e.g. "Past due" → formula.checkbox,
-    "Total" → formula.number, "Full name" → formula.string).
-    For people properties, always use "contains" operator with the person's name — NEVER use "equals".
-    For counting queries ("how many"), set max_results to 50.
+    Filter types & operators: title/rich_text (equals, contains, starts_with, ends_with, is_empty, is_not_empty), number (equals, greater_than, less_than, etc.), select/status (equals, does_not_equal), checkbox (equals true/false), date (equals, before, after, on_or_before, on_or_after), unique_id (equals with numeric value only, e.g. 197 not "TM-197"), people/created_by/last_edited_by (contains with user name, does_not_contain, is_empty, is_not_empty), formula (use dot notation: formula.checkbox, formula.number, etc.), rollup (rollup.number etc.), relation (contains/does_not_contain with page UUID).
     """
     operations = _ctx().operations
     max_results = min(max_results, 50)
@@ -510,13 +463,10 @@ async def search_pages(
 
 @tool
 async def get_page_details(page_id: str) -> str:
-    """Get the full details of a specific Notion page.
+    """Get full details of a specific page.
 
     Args:
-        page_id: The ID of the page to retrieve.
-
-    Returns all properties and their values for the page.
-    Use this when the user wants to see the details of a specific entry.
+        page_id: Page ID.
     """
     operations = _ctx().operations
     page = await operations.get_page(page_id)
@@ -535,26 +485,14 @@ async def get_page_details(page_id: str) -> str:
 
 @tool
 async def create_page(database_id: str, properties_json: str) -> str:
-    """Create a new page (entry) in a Notion database.
+    """Create a new page in a database.
 
     Args:
-        database_id: The ID of the database to create the page in.
-        properties_json: JSON string of property values. Format: {"Property Name": value, ...}
-            Examples:
-            - Title/text property: {"Task Name": "My new task"}
-            - Select/status: {"Status": "In Progress"}
-            - Number: {"Priority": 1}
-            - Checkbox: {"Done": true}
-            - Date: {"Due Date": "2024-01-15"} or {"Due Date": {"start": "2024-01-15", "end": "2024-01-20"}}
-            - Multi-select: {"Tags": ["urgent", "bug"]}
-            - Relation: {"Parent task": [{"id": "<page-uuid>"}]} — MUST be a list of objects with page UUIDs.
-              You can also pass the page's display ID (e.g., "TM-197") and it will be auto-resolved.
-            - People: {"Assignee": [{"id": "<user-uuid>"}]} or [{"id": "User Name"}]
+        database_id: Database ID.
+        properties_json: JSON object of property values, e.g. {"Title":"My task","Status":"In Progress","Priority":1,"Done":true,"Due Date":"2024-01-15","Tags":["urgent"],"Assignee":[{"id":"user-name-or-uuid"}],"Parent":[{"id":"page-uuid-or-display-id"}]}.
 
-    IMPORTANT for relation properties: Always provide a LIST of objects, e.g. [{"id": "..."}].
-    If you only know the display ID (like "TM-197"), pass it as the id and it will be resolved automatically.
-    Before calling this, use get_database_schema to know the available properties and their types.
-    Always confirm with the user what values to set before creating.
+    Use get_database_schema first to check available properties. Confirm values with user before calling.
+    People properties accept names (auto-resolved). Relation properties accept display IDs like "TM-197" (auto-resolved).
     """
     operations = _ctx().operations
 
@@ -587,15 +525,14 @@ async def create_page(database_id: str, properties_json: str) -> str:
 
 @tool
 async def update_page(page_id: str, database_id: str, properties_json: str) -> str:
-    """Update properties of an existing Notion page.
+    """Update properties of an existing page.
 
     Args:
-        page_id: The ID of the page to update.
-        database_id: The ID of the database the page belongs to (needed for schema lookup).
-        properties_json: JSON string of property values to update. Format: {"Property Name": new_value, ...}
-            Only include properties you want to change. Same value formats as create_page.
+        page_id: Page ID to update.
+        database_id: Database ID (for schema lookup).
+        properties_json: JSON of properties to change. Same format as create_page — only include changed fields.
 
-    Before calling this, use get_page_details to show current values, then confirm changes with the user.
+    Confirm changes with user before calling.
     """
     operations = _ctx().operations
 
@@ -628,14 +565,10 @@ async def update_page(page_id: str, database_id: str, properties_json: str) -> s
 
 @tool
 async def delete_page(page_id: str) -> str:
-    """Archive (soft-delete) a Notion page.
+    """Archive (soft-delete) a page. Confirm with user before calling.
 
     Args:
-        page_id: The ID of the page to archive/delete.
-
-    ⚠️ IMPORTANT: Always confirm with the user before calling this tool.
-    Show them which page will be deleted and wait for explicit confirmation.
-    This action archives the page in Notion (can be restored from Notion's trash).
+        page_id: Page ID to archive.
     """
     operations = _ctx().operations
     try:
@@ -651,18 +584,11 @@ async def count_pages(
     database_id: str,
     filters: str | None = None,
 ) -> str:
-    """Count the number of pages in a Notion database matching optional filters.
+    """Count pages matching optional filters. Use for "how many" queries.
 
     Args:
-        database_id: The ID of the database to count pages in.
-        filters: JSON string of filter conditions. Same format as search_pages:
-            [{"property": "Name", "type": "status", "operator": "equals", "value": "Done"}].
-            For formula properties use dot notation for the return type:
-            [{"property": "Past due", "type": "formula.checkbox", "operator": "equals", "value": true}].
-            Set to null to count all pages.
-
-    Use this when the user asks "how many" entries match a condition.
-    Returns the total count of matching pages.
+        database_id: Database ID.
+        filters: Same JSON filter format as search_pages, or null for all pages.
     """
     operations = _ctx().operations
 

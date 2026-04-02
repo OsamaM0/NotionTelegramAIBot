@@ -16,7 +16,6 @@ from src.agent.tools.notion_tools import ToolContext, get_all_tools, get_readonl
 from src.core.platform import PlatformConfig
 from src.db.database import Database
 from src.notion.discovery import DatabaseDiscovery
-from src.notion.formatting import format_schema_for_llm
 from src.notion.operations import NotionOperations
 
 logger = logging.getLogger(__name__)
@@ -34,19 +33,12 @@ def _build_graph(
 
     def agent_node(state: AgentState) -> dict:
         active_db = memory.get_active_database(state.user_id)
-        db_schema_str = None
-        if active_db:
-            db_info = discovery.get_cached_schema(active_db[0])
-            if db_info:
-                # Custom description is stored in state, looked up in process_message
-                custom_desc = state.custom_descriptions.get(active_db[0], "") if state.custom_descriptions else ""
-                db_schema_str = format_schema_for_llm(db_info, custom_description=custom_desc or None)
 
         system_prompt = build_system_prompt(
             user_role=state.user_role,
             platform=platform,
             active_db_name=active_db[1] if active_db else None,
-            active_db_schema=db_schema_str,
+            active_db_id=active_db[0] if active_db else None,
             effective_permissions=state.effective_permissions,
             available_databases=state.available_databases,
         )
@@ -56,7 +48,23 @@ def _build_graph(
         if hasattr(response, "tool_calls") and response.tool_calls:
             for tc in response.tool_calls:
                 logger.info("LLM tool call: %s(%s)", tc["name"], tc["args"])
-        return {"messages": [response]}
+
+        # Accumulate token usage
+        input_tokens = 0
+        output_tokens = 0
+        cached_tokens = 0
+        usage = getattr(response, "usage_metadata", None)
+        if usage:
+            input_tokens = usage.get("input_tokens", 0)
+            output_tokens = usage.get("output_tokens", 0)
+            cached_tokens = usage.get("input_token_details", {}).get("cache_read", 0) if usage.get("input_token_details") else 0
+
+        return {
+            "messages": [response],
+            "total_input_tokens": state.total_input_tokens + input_tokens,
+            "total_output_tokens": state.total_output_tokens + output_tokens,
+            "total_cached_tokens": state.total_cached_tokens + cached_tokens,
+        }
 
     def should_continue(state: AgentState) -> str:
         last_message = state.messages[-1]
@@ -73,6 +81,26 @@ def _build_graph(
     return graph.compile()
 
 
+# ── Cost Estimation ────────────────────────────────────────────────────────
+
+
+def _estimate_cost(
+    input_tokens: int,
+    output_tokens: int,
+    cached_tokens: int,
+    cost_input: float,
+    cost_output: float,
+    cost_cached: float,
+) -> float:
+    """Return estimated cost in USD using per-1M-token rates from settings."""
+    billable_input = input_tokens - cached_tokens
+    return (
+        billable_input * cost_input
+        + output_tokens * cost_output
+        + cached_tokens * cost_cached
+    ) / 1_000_000
+
+
 # ── Agent ──────────────────────────────────────────────────────────────────
 
 class NotionAgent:
@@ -87,6 +115,9 @@ class NotionAgent:
         memory: ConversationMemory,
         database: Database,
         platform: PlatformConfig | None = None,
+        token_cost_input: float = 0.10,
+        token_cost_output: float = 0.40,
+        token_cost_cached: float = 0.025,
     ) -> None:
         self._discovery = discovery
         self._operations = operations
@@ -94,6 +125,10 @@ class NotionAgent:
         self._database = database
         self._platform = platform or PlatformConfig()
         self._permissions = PermissionResolver(database)
+        self._model = model
+        self._token_cost_input = token_cost_input
+        self._token_cost_output = token_cost_output
+        self._token_cost_cached = token_cost_cached
 
         self._all_tools = get_all_tools()
         self._readonly_tools = get_readonly_tools()
@@ -161,7 +196,6 @@ class NotionAgent:
             active_database_name=active_db[1] if active_db else None,
             effective_permissions=effective_permissions,
             available_databases=available_databases,
-            custom_descriptions=custom_descriptions,
         )
 
         try:
@@ -173,7 +207,22 @@ class NotionAgent:
                     response_text = msg.content
                     break
 
+            # Append cost info
+            total_in = result.get("total_input_tokens", 0)
+            total_out = result.get("total_output_tokens", 0)
+            total_cached = result.get("total_cached_tokens", 0)
+            cost = _estimate_cost(
+                total_in, total_out, total_cached,
+                self._token_cost_input, self._token_cost_output, self._token_cost_cached,
+            )
+
             self._memory.add_assistant_message(user_id, response_text)
+
+            cost_parts = [f"{total_in}↑ {total_out}↓"]
+            if total_cached:
+                cost_parts.append(f"{total_cached}⚡cached")
+            response_text += f"\n\n_💲 ~${cost:.4f} ({' '.join(cost_parts)} tokens)_"
+
             return response_text
 
         except Exception:

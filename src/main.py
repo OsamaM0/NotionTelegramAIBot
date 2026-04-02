@@ -57,6 +57,9 @@ async def main() -> None:
         memory=memory,
         database=database,
         platform=platform,
+        token_cost_input=settings.token_cost_input,
+        token_cost_output=settings.token_cost_output,
+        token_cost_cached=settings.token_cost_cached,
     )
 
     # Pre-fetch databases

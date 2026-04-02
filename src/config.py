@@ -31,8 +31,13 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # Agent Settings
-    max_conversation_history: int = 20
+    max_conversation_history: int = 10
     notion_schema_cache_ttl: int = 300  # seconds
+
+    # Token cost per 1M tokens in USD
+    token_cost_input: float = 0.10
+    token_cost_output: float = 0.40
+    token_cost_cached: float = 0.025
 
     @field_validator("admin_user_ids", mode="before")
     @classmethod

@@ -34,7 +34,8 @@ class DatabaseDiscovery:
             return self._list_cache
 
         raw_databases = await self._client.search_databases()
-        self._list_cache = [DatabaseInfo.from_notion(db) for db in raw_databases]
+        all_dbs = [DatabaseInfo.from_notion(db) for db in raw_databases]
+        self._list_cache = [db for db in all_dbs if db.title.strip()]
         self._last_list_refresh = now
 
         # Update individual DB caches (formula probing is deferred to get_database_schema)

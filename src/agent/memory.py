@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class ConversationMemory:
     """Per-user conversation memory with sliding window."""
 
-    def __init__(self, max_messages: int = 20) -> None:
+    def __init__(self, max_messages: int = 10) -> None:
         self._max_messages = max_messages
         self._histories: dict[int, list[BaseMessage]] = defaultdict(list)
         self._active_db: dict[int, tuple[str, str] | None] = {}  # user_id -> (db_id, db_name)
